@@ -216,7 +216,9 @@ class ProductionChainSolver:
         output_amount = output_data["amount"]
         output_rate_per_machine = (output_amount / crafting_speed) * 60  # items per minute
         
-        machines_needed = required_rate / output_rate_per_machine if output_rate_per_machine > 0 else 0
+        # Calculate machines needed (round up to whole machines)
+        import math
+        machines_needed = math.ceil(required_rate / output_rate_per_machine) if output_rate_per_machine > 0 else 0
         
         # Create machine node
         node_id = f"node_{len(self.nodes)}_{item_id}"

@@ -43,7 +43,7 @@ class MachineNode:
     
     # Production details
     target_rate: float  # items/min output
-    machine_count: float  # can be fractional
+    machine_count: int  # whole machines only (1, 2, 3, ...)
     clock_speed: float = 100.0  # percentage (100 = normal speed)
     
     # Resource consumption
@@ -128,7 +128,7 @@ class ProductionChainResult:
     
     def calculate_summary(self):
         """Calculate summary statistics."""
-        self.total_machines = sum(int(node.machine_count + 0.99) for node in self.nodes)  # ceiling
+        self.total_machines = sum(node.machine_count for node in self.nodes)
         self.total_power = sum(node.total_power for node in self.nodes)
         self.total_raw_resources = len(self.raw_resources)
 
@@ -152,7 +152,7 @@ class ProductionStage:
     
     def get_total_machines(self):
         """Get total machines in this stage."""
-        return sum(int(node.machine_count + 0.99) for node in self.nodes)
+        return sum(node.machine_count for node in self.nodes)
     
     def get_total_power(self):
         """Get total power in this stage."""

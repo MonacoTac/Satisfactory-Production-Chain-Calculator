@@ -623,6 +623,7 @@ RECIPES = {
         "alternateRecipe": False,
         "inputs": [{"item": "crude_oil", "amount": 30}],
         "outputs": [{"item": "plastic", "amount": 20}]
+                  
     },
     "rubber": {
         "id": "rubber",
