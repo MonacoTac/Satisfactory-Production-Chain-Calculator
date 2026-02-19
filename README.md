@@ -166,8 +166,7 @@ This will:
 **Alternative (manual):**
 ```powershell
 cd app
-.\venv\Scripts\activate
-streamlit run streamlit_app.py
+python -m streamlit run streamlit_app.py
 ```
 
 ### Linux/macOS
