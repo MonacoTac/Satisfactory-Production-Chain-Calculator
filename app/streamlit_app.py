@@ -66,7 +66,7 @@ with st.sidebar:
         if st.button("🔓 Unlock All", use_container_width=True):
             all_recipes = satisfactory_db.get_all_recipes()
             st.session_state.unlocked_recipes = set(all_recipes.keys())
-            st.success("All recipes unlocked!")
+            st.rerun()
     
     with col2:
         if st.button("🔒 Standard Only", use_container_width=True):
@@ -75,7 +75,7 @@ with st.sidebar:
                 rid for rid, recipe in all_recipes.items() 
                 if not recipe["alternateRecipe"]
             )
-            st.success("Reset to standard recipes!")
+            st.rerun()
     
     # Export/Import recipes
     with st.expander("📤 Export/Import Recipes", expanded=False):
@@ -114,6 +114,11 @@ with st.sidebar:
     st.subheader("🔧 Select Recipes")
     
     all_recipes = satisfactory_db.get_all_recipes()
+    
+    # Display recipe count
+    total_recipes = len(all_recipes)
+    selected_recipes = len(st.session_state.unlocked_recipes)
+    st.info(f"📊 **{selected_recipes}** of **{total_recipes}** recipes selected")
     
     # Group recipes by category
     categories = {}
