@@ -58,23 +58,37 @@ with st.sidebar:
         local_storage_component.display_localStorage_status()
         st.info("Recipe settings are saved in your browser. Use Export/Import if localStorage is unavailable.")
     
+    all_recipes = satisfactory_db.get_all_recipes()
+
+    def apply_recipe_selection(selected_recipe_ids):
+        st.session_state.unlocked_recipes = set(selected_recipe_ids)
+        for recipe_id in all_recipes.keys():
+            st.session_state[f"recipe_{recipe_id}"] = recipe_id in st.session_state.unlocked_recipes
+
     # Recipe preset selection
     st.markdown("**Quick Presets:**")
-    col1, col2 = st.columns(2)
+    total_recipes = len(all_recipes)
+    standard_recipe_ids = {
+        rid for rid, recipe in all_recipes.items()
+        if not recipe["alternateRecipe"]
+    }
+    selected_recipes = len(st.session_state.unlocked_recipes)
+
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("🔓 Unlock All", use_container_width=True):
-            all_recipes = satisfactory_db.get_all_recipes()
-            st.session_state.unlocked_recipes = set(all_recipes.keys())
+        if st.button(f"🔓 Unlock All ({total_recipes})", use_container_width=True):
+            apply_recipe_selection(all_recipes.keys())
             st.rerun()
     
     with col2:
-        if st.button("🔒 Standard Only", use_container_width=True):
-            all_recipes = satisfactory_db.get_all_recipes()
-            st.session_state.unlocked_recipes = set(
-                rid for rid, recipe in all_recipes.items() 
-                if not recipe["alternateRecipe"]
-            )
+        if st.button(f"🔒 Standard Only ({len(standard_recipe_ids)})", use_container_width=True):
+            apply_recipe_selection(standard_recipe_ids)
+            st.rerun()
+
+    with col3:
+        if st.button(f"🧹 Clear Selection ({selected_recipes})", use_container_width=True):
+            apply_recipe_selection(set())
             st.rerun()
     
     # Export/Import recipes
@@ -113,10 +127,7 @@ with st.sidebar:
     # Recipe selection by category
     st.subheader("🔧 Select Recipes")
     
-    all_recipes = satisfactory_db.get_all_recipes()
-    
     # Display recipe count
-    total_recipes = len(all_recipes)
     selected_recipes = len(st.session_state.unlocked_recipes)
     st.info(f"📊 **{selected_recipes}** of **{total_recipes}** recipes selected")
     
