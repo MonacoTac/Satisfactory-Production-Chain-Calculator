@@ -43,7 +43,7 @@ class MachineNode:
     
     # Production details
     target_rate: float  # items/min output
-    machine_count: int  # whole machines only (1, 2, 3, ...)
+    machine_count: int  # whole machines (factory places integer buildings)
     clock_speed: float = 100.0  # percentage (100 = normal speed)
     
     # Resource consumption
@@ -60,6 +60,7 @@ class MachineNode:
     
     def __post_init__(self):
         """Calculate total power."""
+        # total_power handles fractional machine counts correctly
         self.total_power = self.power_per_machine * self.machine_count * (self.clock_speed / 100.0)
 
 
