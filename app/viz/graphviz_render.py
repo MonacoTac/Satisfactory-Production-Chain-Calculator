@@ -111,12 +111,15 @@ def _create_node_label(node: MachineNode, show_power: bool) -> str:
     # Recipe name
     lines.append(node.recipe_name)
     
-    # Machine count
+    # Machine count (always integer in current model)
     machine_count_ceil = int(node.machine_count + 0.99)  # Ceiling
     if node.machine_count % 1 < 0.01:  # Nearly whole number
         lines.append(f"{machine_count_ceil}x {node.machine_type}")
     else:
         lines.append(f"{node.machine_count:.2f}x {node.machine_type}")
+    # Clock speed/utilization
+    if node.clock_speed < 100.0:
+        lines.append(f"@{node.clock_speed:.0f}%")
     
     # Output rate
     lines.append(f"→ {node.target_rate:.1f} {node.item_produced_name}/min")
@@ -146,7 +149,8 @@ def _create_node_tooltip(node: MachineNode) -> str:
     lines = [
         f"Recipe: {node.recipe_name}",
         f"Machine: {node.machine_type}",
-        f"Count: {node.machine_count:.2f}",
+        f"Count: {node.machine_count}",
+        f"Clock: {node.clock_speed:.1f}%",
         f"Output: {node.target_rate:.2f} {node.item_produced_name}/min",
         f"Power: {node.total_power:.2f} MW"
     ]

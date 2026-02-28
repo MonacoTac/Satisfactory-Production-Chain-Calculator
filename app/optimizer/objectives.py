@@ -24,25 +24,29 @@ def score_recipe(
         Score (higher is better)
     """
     # Base calculations
-    crafting_speed = recipe["craftingSpeed"]
     power = recipe["powerConsumption"]
     
-    # Calculate output rate per machine
+    # In this dataset the recipe "amount" is already a per-minute rate.
+    # We ignore craftingSpeed and use the raw amount directly.
     output_amount = sum(output["amount"] for output in recipe["outputs"])
-    output_rate_per_machine = (output_amount / crafting_speed) * 60  # items per minute
+    output_rate_per_machine = output_amount
     
-    # Calculate machines needed
-    machines_needed = target_rate / output_rate_per_machine if output_rate_per_machine > 0 else float('inf')
-    
-    # Calculate total power needed
-    total_power = machines_needed * power
+    # Calculate machines needed as integer and approximate utilization
+    import math
+    machines_needed = math.ceil(target_rate / output_rate_per_machine) if output_rate_per_machine > 0 else float('inf')
+    # compute clock speed fraction (0-1)
+    clock_util = (target_rate / (machines_needed * output_rate_per_machine)) if machines_needed > 0 else 1.0
+    clock_util = min(clock_util, 1.0)
+    # Calculate total power needed (scales with clock speed)
+    total_power = machines_needed * power * clock_util
     
     # Calculate input complexity (number of input types)
     input_complexity = len(recipe["inputs"])
     
-    # Calculate total input resources needed
+    # Calculate total input resources needed (scaled by clock utilization)
+    # inputs are stored as per-minute amounts, so we can use them directly
     total_input_rate = sum(
-        (inp["amount"] / crafting_speed) * 60 * machines_needed
+        inp["amount"] * machines_needed * clock_util
         for inp in recipe["inputs"]
     )
     
@@ -210,12 +214,12 @@ def calculate_recipe_efficiency(recipe: Dict) -> float:
     Returns:
         Efficiency score (higher is better)
     """
-    crafting_speed = recipe["craftingSpeed"]
     power = recipe["powerConsumption"]
     
     # Calculate output per minute
     output_amount = sum(output["amount"] for output in recipe["outputs"])
-    output_rate = (output_amount / crafting_speed) * 60
+    # output_amount already reflects per-minute production
+    output_rate = output_amount
     
     # Calculate efficiency: output per power per minute
     if power > 0:

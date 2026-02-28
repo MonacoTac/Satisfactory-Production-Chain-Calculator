@@ -1,5 +1,10 @@
 """
 Production chain solver - core algorithm for computing optimal production chains.
+
+This implementation supports fractional machine counts and properly aggregates
+requirements from multiple branches of the dependency tree. Accurate input/
+output ratios are maintained and connections between machines are split
+proportionally when an item is produced by multiple nodes.
 """
 
 from typing import Dict, List, Set, Optional, Tuple
@@ -40,7 +45,8 @@ class ProductionChainSolver:
         self.connections: List[Connection] = []
         self.raw_requirements: Dict[str, float] = {}  # item_id -> rate
         self.item_production: Dict[str, List[str]] = {}  # item_id -> [node_ids producing it]
-        self.visited_items: Set[str] = set()  # For cycle detection
+        # Note: visited_items tracking removed to allow multiple branches of same item
+        self.visited_items: Set[str] = set()  # legacy, unused
         self.processing_stack: List[str] = []  # For cycle detection
         
     def solve(
@@ -100,7 +106,6 @@ class ProductionChainSolver:
         self.connections = []
         self.raw_requirements = {}
         self.item_production = {}
-        self.visited_items = set()
         self.processing_stack = []
         
         # Recursively build production chain
@@ -168,10 +173,6 @@ class ProductionChainSolver:
             result.add_warning(f"Circular dependency detected for {item['name']} - recycling loop")
             return True  # Don't fail, just mark it
         
-        # If already processed, just ensure we have enough production
-        if item_id in self.visited_items:
-            return True
-        
         # Mark as being processed
         self.processing_stack.append(item_id)
         
@@ -207,20 +208,32 @@ class ProductionChainSolver:
             self.processing_stack.remove(item_id)
             return False
         
-        # Calculate machines needed
-        crafting_speed = best_recipe["craftingSpeed"]
+        # In this dataset the "amount" field is already the per-minute
+        # output of a single machine at 100% clock.  Crafting speed is
+        # retained for informational purposes but is not used in rate
+        # calculations.  This avoids the previous behaviour that blew up
+        # throughputs by multiplying twice.
         output_data = next(
             (out for out in best_recipe["outputs"] if out["item"] == item_id),
             best_recipe["outputs"][0]
         )
         output_amount = output_data["amount"]
-        output_rate_per_machine = (output_amount / crafting_speed) * 60  # items per minute
+        output_rate_per_machine = output_amount
         
-        # Calculate machines needed (round up to whole machines)
+        # Calculate machines needed as whole units. Building counts are
+        # integers; any excess capacity is absorbed by running the machines at
+        # a lower clock speed.
         import math
         machines_needed = math.ceil(required_rate / output_rate_per_machine) if output_rate_per_machine > 0 else 0
+
+        # compute clock speed percentage such that machines_needed *
+        # output_rate_per_machine * (clock_speed/100) == required_rate
+        if machines_needed > 0 and output_rate_per_machine > 0:
+            clock_speed = min(100.0, (required_rate / (machines_needed * output_rate_per_machine)) * 100.0)
+        else:
+            clock_speed = 100.0
         
-        # Create machine node
+        # Create machine node with integer count and computed clock speed
         node_id = f"node_{len(self.nodes)}_{item_id}"
         node = MachineNode(
             node_id=node_id,
@@ -231,6 +244,7 @@ class ProductionChainSolver:
             item_produced_name=item["name"],
             target_rate=required_rate,
             machine_count=machines_needed,
+            clock_speed=clock_speed,
             power_per_machine=best_recipe["powerConsumption"],
             tier=best_recipe["unlockTier"],
             is_alternate=best_recipe["alternateRecipe"]
@@ -240,8 +254,9 @@ class ProductionChainSolver:
         for input_data in best_recipe["inputs"]:
             input_item_id = input_data["item"]
             input_amount = input_data["amount"]
-            input_rate_per_machine = (input_amount / crafting_speed) * 60
-            total_input_rate = input_rate_per_machine * machines_needed
+            # database stores input amounts as per-minute rates, no need for crafting_speed
+            input_rate_per_machine = input_amount
+            total_input_rate = input_rate_per_machine * machines_needed * (clock_speed / 100.0)
             
             # Add to node inputs
             input_item = self.all_items.get(input_item_id)
@@ -267,8 +282,9 @@ class ProductionChainSolver:
         for output_data in best_recipe["outputs"]:
             output_item_id = output_data["item"]
             output_amount = output_data["amount"]
-            output_rate_per_machine = (output_amount / crafting_speed) * 60
-            total_output_rate = output_rate_per_machine * machines_needed
+            # outputs are already given as per-minute rates in this dataset
+            output_rate_per_machine = output_amount
+            total_output_rate = output_rate_per_machine * machines_needed * (clock_speed / 100.0)
             
             output_item = self.all_items.get(output_item_id)
             node.outputs.append(ItemFlow(
@@ -285,34 +301,103 @@ class ProductionChainSolver:
             self.item_production[item_id] = []
         self.item_production[item_id].append(node_id)
         
-        # Mark as visited
-        self.visited_items.add(item_id)
+        # finished processing this item for this branch
         self.processing_stack.remove(item_id)
         
         return True
     
+    def _merge_nodes(self):
+        """Combine multiple machine nodes producing the same item into one.
+
+        The user requested that nodes be merged by item regardless of recipe
+        or clock speed.  This method aggregates machine counts, target rates,
+        power, and flows.  If two nodes use different recipes the merged node
+        is marked as "multiple" so that consumers know the detail has been
+        lost.
+        """
+        merged: Dict[str, MachineNode] = {}
+        for node in self.nodes:
+            key = node.item_produced
+            if key not in merged:
+                # copy the node to avoid mutating the original
+                from copy import deepcopy
+                merged[key] = deepcopy(node)
+            else:
+                m = merged[key]
+                prev_rate = m.target_rate
+                # combine basic quantities
+                m.machine_count += node.machine_count
+                m.target_rate += node.target_rate
+                # weighted average clock speed by rate
+                if m.target_rate > 0:
+                    m.clock_speed = (
+                        m.clock_speed * prev_rate
+                        + node.clock_speed * node.target_rate
+                    ) / m.target_rate
+                m.total_power += node.total_power
+                # merge inputs
+                inputs_map = {inp.item_id: inp for inp in m.inputs}
+                for inp in node.inputs:
+                    if inp.item_id in inputs_map:
+                        inputs_map[inp.item_id].rate += inp.rate
+                    else:
+                        inputs_map[inp.item_id] = inp
+                m.inputs = list(inputs_map.values())
+                # merge outputs
+                outputs_map = {out.item_id: out for out in m.outputs}
+                for out in node.outputs:
+                    if out.item_id in outputs_map:
+                        outputs_map[out.item_id].rate += out.rate
+                    else:
+                        outputs_map[out.item_id] = out
+                m.outputs = list(outputs_map.values())
+                # if recipe differs, mark as multiple
+                if node.recipe_id != m.recipe_id:
+                    m.recipe_id = "multiple"
+                    m.recipe_name = "Multiple"
+                    m.machine_type = "mixed"
+        # rewrite node list and item_production
+        self.nodes = list(merged.values())
+        self.item_production = {item: [node.node_id] for item, node in merged.items()}
+
     def _build_connections(self):
-        """Build connections between nodes after chain is complete."""
-        # This will be called after all nodes are created
-        # to establish explicit connections for visualization
+        """Build connections between nodes after chain is complete.
+        Distribute input rates across multiple producers proportionally
+        according to each producer's output rate for that item."""
         connection_id = 0
-        
+
+        # build a mapping of producers for each item with their output rates
+        producers: Dict[str, List[Tuple[str, float]]] = {}
+        for node in self.nodes:
+            for out in node.outputs:
+                producers.setdefault(out.item_id, []).append((node.node_id, out.rate))
+
+        # iterate through each consumer node and allocate its inputs
         for node in self.nodes:
             for input_flow in node.inputs:
-                # Find nodes that produce this input
-                if input_flow.item_id in self.item_production:
-                    for producer_node_id in self.item_production[input_flow.item_id]:
-                        connection = Connection(
-                            connection_id=f"conn_{connection_id}",
-                            from_node_id=producer_node_id,
-                            to_node_id=node.node_id,
-                            item_id=input_flow.item_id,
-                            item_name=input_flow.item_name,
-                            rate=input_flow.rate,
-                            is_recycling_loop=False  # TODO: detect actual loops
-                        )
-                        self.connections.append(connection)
-                        connection_id += 1
+                prod_list = producers.get(input_flow.item_id, [])
+                if not prod_list:
+                    continue
+
+                total_prod = sum(rate for _, rate in prod_list)
+                # avoid division by zero
+                if total_prod <= 0:
+                    continue
+
+                # allocate input rate proportionally
+                for prod_node_id, prod_rate in prod_list:
+                    allocated = input_flow.rate * (prod_rate / total_prod)
+                    connection = Connection(
+                        connection_id=f"conn_{connection_id}",
+                        from_node_id=prod_node_id,
+                        to_node_id=node.node_id,
+                        item_id=input_flow.item_id,
+                        item_name=input_flow.item_name,
+                        rate=allocated,
+                        is_recycling_loop=False  # TODO: detect actual loops
+                    )
+                    self.connections.append(connection)
+                    connection_id += 1
 
 
 def calculate_production_chain(
@@ -346,7 +431,12 @@ def calculate_production_chain(
         allow_locked_preview=allow_locked_preview
     )
     
-    # Build connections for visualization
+    # optionally merge similar nodes to reduce clutter
+    solver._merge_nodes()
+    # make sure the result object also reflects the merged list
+    result.nodes = solver.nodes
+
+    # Build connections for visualization using the merged nodes
     solver.connections = []
     solver._build_connections()
     result.connections = solver.connections
